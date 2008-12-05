@@ -1,4 +1,7 @@
 Revision history for Perl extension for Nginx::Simple
 
+0.02 2008-12-05
+    - New release.
+
 0.01 2008-09-28
     - Initial import.

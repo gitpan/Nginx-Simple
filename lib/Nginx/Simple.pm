@@ -1,7 +1,7 @@
 package Nginx::Simple;
 use Exporter;
 
-our $VERSION = '0.03';
+our $VERSION = '0.04';
 
 @ISA = qw(Exporter);
 
@@ -245,7 +245,7 @@ sub status
     }
     else
     {
-        return $status;
+        return $request_data{status};
     }
 }
 

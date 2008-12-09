@@ -1,5 +1,9 @@
 Revision history for Perl extension for Nginx::Simple
 
+0.03 2008-12-08
+    - Added cleanup sub.
+    - Ridded need of handler sub in primary module.
+
 0.02 2008-12-05
     - New release.
 

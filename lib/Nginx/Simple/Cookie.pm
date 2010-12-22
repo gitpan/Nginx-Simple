@@ -56,4 +56,15 @@ sub read
     return parse CGI::Cookie($cookies);
 }
 
+=head1 Author
+
+Michael J. Flickinger, C<< <mjflick@open-site.org> >>
+
+=head1 Copyright & License
+
+You may distribute under the terms of either the GNU General Public
+License or the Artistic License.
+
+=cut
+
 1;

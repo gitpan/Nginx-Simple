@@ -1,5 +1,8 @@
 Revision history for Perl extension for Nginx::Simple
 
+0.06 2010-12-22
+    - Added lightweight dispatching engine along with "ngs" utility.
+
 0.04 2008-12-08
     - fixing status bug
 

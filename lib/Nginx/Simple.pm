@@ -1,7 +1,7 @@
 package Nginx::Simple;
 use Exporter;
 
-our $VERSION = '0.04';
+our $VERSION = '0.06';
 
 @ISA = qw(Exporter);
 
@@ -9,9 +9,17 @@ use nginx;
 use strict;
 
 use Nginx::Simple::Cookie;
+use Time::HiRes qw(gettimeofday tv_interval);
+
+BEGIN { require 5.008004; }
+
+# Export all @HTTP_STATUS_CODES
+our @EXPORT = ('dispatch');
 
 # data for request
 my %request_data;
+my @error_stack;
+my $die_error;
 
 =head1 NAME
 
@@ -36,6 +44,14 @@ Nginx::Simple - Easy to use interface for "--with-http_perl_module"
     package Test;
     use Nginx::Simple;
 
+    # (optional) triggered before main is run
+    sub init
+    {
+        my $self = shift;
+
+        $self->{user} = 'stinky_pete';
+    }
+
     # automatically dispatches here
     sub main
     {
@@ -43,6 +59,7 @@ Nginx::Simple - Easy to use interface for "--with-http_perl_module"
         
         $self->header_set('Content-Type' => 'text/html');
         $self->print('rock on!');
+        $self->print("$self->{user} is using the system");
 	
         $self->log('I found a rabbit...');
         
@@ -73,7 +90,7 @@ Nginx::Simple - Easy to use interface for "--with-http_perl_module"
 sub import
 {
     my ($class, $settings) = @_;
-    
+
     my $caller = caller;
     {
         no strict 'refs';
@@ -92,13 +109,23 @@ sub dispatch
 {
     my ($r, %params) = @_;
 
-    my $class  = $params{class};
-    my $method = $params{method};
-    my $error  = $params{error};
+    my $class      = $params{class};
+    my $method     = $params{method};
+    my $error      = $params{error};
+    my $bless      = $params{bless};
+    my $base_class = $params{base_class};
 
-    $r->variable('call_class',  $class           );
-    $r->variable('call_method', $method || 'main');
-    $r->variable('error',       $error  || ''    );
+    $r->variable('call_class',  $class               );
+    $r->variable('call_method', $method     || 'main');
+    $r->variable('error',       $error      || ''    );
+    $r->variable('bless',       $bless      || ''    );
+    $r->variable('base_class',  $base_class || ''    );
+
+    unless ($method eq 'error')
+    {
+        @error_stack = ( );
+        $die_error   = q[];
+    }
 
     if (not $error and $r->has_request_body(\&handle_request_body))
     {
@@ -120,7 +147,7 @@ Returns the nginx server object.
 
 =cut
 
-sub server           { $request_data{server_object}              }
+sub server           { $request_data{server_object}        }
 
 =head3 $self->uri
 
@@ -179,7 +206,55 @@ sub print
     $request_data{output} .= join '', @_;
 }
 
-sub unescape         { shift->server->unescape(@_)         }
+=head3 $self->auto_header
+
+Returns true if set, otherwise args 1 sets true and 0 false.
+
+=cut
+
+sub auto_header
+{
+    my ($self, $arg) = @_;
+
+    if (defined $arg)
+    {
+        if ($arg)
+        {
+            delete $request_data{disable_auto_header};
+        }
+        else	
+        {
+            $request_data{disable_auto_header} = 1;
+        }
+    }
+
+    return(not exists $request_data{disable_auto_header});
+}
+
+=head3 $self->dispatching
+
+Returns true if we're dispatching actively.
+
+=cut
+
+sub dispatching
+{
+    my ($self, $arg) = @_;
+
+    if (defined $arg)
+    {
+        if ($arg)
+        {
+            delete $request_data{disable_dispatching};
+        }
+        else	
+        {
+            $request_data{disable_dispatching} = 1;
+        }
+    }
+
+    return(not exists $request_data{disable_dispatching});
+}
 
 =head3 $self->header_set('header_type', 'value')
 
@@ -272,7 +347,7 @@ sub param
         {
             if ($lookup_key)
             {
-                push @values, $part->{data}
+                push @values, $self->unescape($part->{data})
                     if $lookup_key eq $part->{name};
             }
             else
@@ -291,7 +366,8 @@ sub param
             
             if ($lookup_key)
             {
-                push @values, $value if $lookup_key eq $key;
+                push @values, $self->unescape($value)
+                    if $lookup_key eq $key;
             }
             else
             {
@@ -425,9 +501,6 @@ sub handle_request_body
 sub init_dispatcher {
     my ($r, %params) = @_;
     
-    my $self = { };
-    bless $self;
-
     %request_data = (
         headers       => { 'Content-Type' => 'text/html' },
         output        => q[],
@@ -435,86 +508,212 @@ sub init_dispatcher {
         server_object => $r,
         request       => $params{request} || $r->request_body,
         args          => $params{args}    || $r->args,
-        request_parts => $params{request_parts},        
+        request_parts => $params{request_parts},
+        begin_time    => [gettimeofday],
     );
     
-    my $class   = $r->variable('call_class');
-    my $method  = $r->variable('call_method');
+    my $class      = $r->variable('call_class');
+    my $bless      = $r->variable('bless');
+    my $base_class = $r->variable('base_class');
+    my $method     = $r->variable('call_method');
+
     $r->variable('call_class',  undef);
+    $r->variable('bless',       undef);
+    $r->variable('base_class',  undef);
     $r->variable('call_method', undef);
+
+    my $self = { };
+    $bless ? bless($self, $class) : bless($self);
 
     my $sub_call = "$class\::$method";
     if (UNIVERSAL::can($class, $method))
     { 
         no strict 'refs';
 
+        # pre-run sub, if defined
+        my $init_class = $base_class || $class;
+        if (UNIVERSAL::can($init_class, 'init') and not $method eq 'error')
+        {
+            no strict 'refs';
+            eval {
+                local $SIG{__DIE__} = sub { &format_error(shift) };
+                if ($bless)
+                {
+                    $self->init;
+                }
+                else
+                {
+                    my $prerun_sub = "$init_class\::init";
+                    $prerun_sub->($self);
+                }
+            };
+
+            if ($@ and $@ ne "nginx-exit\n")
+            {
+                if ($method eq 'error')
+                {
+                    # you've got an error in your error handler
+                    warn "Error in error handler... ($class\::error)\n";
+
+                    return $self->init_error($sub_call);
+                }
+
+                return &dispatch(
+                    $self->server,
+                    class  => $init_class,
+                    method => 'error', 
+                    error  => "$@",
+                );
+            }
+        }
+
         my $error = $self->server->variable('error');
 
-        eval { $sub_call->($self, $error) };
-
-        if ($@ and $@ ne "nginx-exit\n")
+        if ($self->dispatching)
         {
-            warn "$@\n";
+            eval { 
+                local $SIG{__DIE__} = sub { &format_error(shift) };
 
-            if ($method eq 'error')
+                if ($bless)
+                {
+                    $self->$method($error);
+                }
+                else
+                {
+                    $sub_call->($self, $error);
+                }
+            };
+
+            if ($@ and $@ ne "nginx-exit\n")
             {
-                # you've got an error in your error handler
-                warn "Error in error handler... ($class\::error)\n";
+                if ($method eq 'error')
+                {
+                    # you've got an error in your error handler
+                    warn "Error in error handler... ($class\::error)\n";
 
-                return $self->init_error($sub_call);
+                    return $self->init_error($sub_call);
+                }
+
+                return &dispatch(
+                    $self->server,
+                    class  => $init_class,
+                    method => 'error', 
+                    error  => "$@",
+                );
             }
+            else
+            {
+                # process all data
+                $self->process_auto_header
+                    if $self->auto_header and $self->dispatching;
 
-            return &dispatch(
-                $self->server,
-                class  => $class,
-                method => 'error', 
-                error  => "$@",
-            );
+                # post-run sub, if defined
+                my $cleanup_class = $base_class || $class;
+                if (UNIVERSAL::can($cleanup_class, 'cleanup') and $method ne 'error'
+                    and $self->dispatching)
+                {
+                    no strict 'refs';
+                    eval { 
+                        local $SIG{__DIE__} = sub { &format_error(shift) };
+                        if ($bless)
+                        {
+                            $self->cleanup;
+                        }
+                        else
+                        {
+                            my $cleanup_sub = "$cleanup_class\::cleanup";
+                            $cleanup_sub->($self);
+                        }
+                    };
+                }
+            }
         }
-        else
-        {
-            $self->server->status($self->status);
-            
-            my $content_type = delete $request_data{headers}{'Content-Type'};
 
-            $self->server->header_out($_, $request_data{headers}{$_})
-                for keys %{$request_data{headers}};
+        undef $self;
 
-            $self->server->send_http_header($content_type);
+        return OK;
 
-            $self->server->print($request_data{output});
-
-            # ensure all data is transmitted
-            $self->flush;
-
-            # post-run sub, if defined
-            if (UNIVERSAL::can($class, 'cleanup'))
-            {
-                no strict 'refs';
-                my $cleanup_sub = "$class\::cleanup";
-                eval { $cleanup_sub->($self) };
-
-                warn "$@" if $@ and $@ ne "nginx-exit\n";
-            }
-
-            # always return OK
-            return OK;
-        }       
     }
     else
     {
-        # post-run sub, if defined
-        if (UNIVERSAL::can($class, 'cleanup'))
-        {
-            no strict 'refs';
-            my $cleanup_sub = "$class\::cleanup";
-            eval { $cleanup_sub->($self) };
-            
-            warn "$@" if $@ and $@ ne "nginx-exit\n";
-        }
-        
         return $self->init_error($sub_call);
     }
+}
+
+=head3 process_auto_header
+
+Process the autoheader.
+
+=cut
+
+sub process_auto_header
+{
+    my $self = shift;
+
+    $self->server->status($self->status);
+            
+    my $content_type = delete $request_data{headers}{'Content-Type'};
+
+    $self->server->header_out($_, $request_data{headers}{$_})
+        for keys %{$request_data{headers}};
+
+    $self->server->send_http_header($content_type);
+
+    $self->server->print($request_data{output});
+
+    # ensure all data is transmitted
+    $self->flush;
+}
+
+sub format_error
+{
+    my $error  = shift;
+    my @stack  = &make_error_stack;
+    $die_error = $error;
+
+    return if $error eq "nginx-exit\n";
+
+    warn $error;
+
+    for my $e (@stack)
+    {
+        warn "$e->{sub} called at $e->{file} line $e->{line}\n";
+    }
+}
+
+sub error_stack { @error_stack };
+sub get_error   { $die_error   };
+
+sub make_error_stack
+{
+    my @stack;
+    my $i = 0;
+    while (my @x = caller(++$i)) {
+        push @stack, {
+            pack => $x[0],
+            file => $x[1],
+            line => $x[2],
+            sub  => $x[3],
+        };
+    }
+
+    shift @stack;
+    shift @stack;
+
+    pop @stack;
+
+    for (1..5)
+    {
+        pop @stack
+            if $stack[-1] and $stack[-1]->{sub} =~ /^Nginx::Simple/;
+
+        pop @stack
+            if $stack[-1] and $stack[-1]->{file} =~ /\/Nginx\/Simple.pm$/;
+    }
+
+    @error_stack = @stack;
+
+    return @stack;
 }
 
 sub init_error
@@ -525,6 +724,22 @@ sub init_error
         unless $sub =~ /error$/;
 
     return HTTP_SERVER_ERROR;
+}
+
+=head3 $self->unescape
+
+Unscape HTTP URI encoding.
+
+=cut
+
+sub unescape
+{
+    my ($self, $value) = @_;
+
+    $value =~ s/\+/ /g;
+    $value = $self->server->unescape($value);
+
+    return $value;
 }
 
 =head3 $self->cookie
@@ -544,6 +759,14 @@ sub cookie { new Nginx::Simple::Cookie(shift) }
     *{"CORE::GLOBAL::exit"}  = sub { die "nginx-exit\n" };
     *{"CORE::GLOBAL::print"} = sub { };
 }
+
+=head3 $self->elapsed_time
+
+Returns elapsed time since initial dispatch.
+
+=cut
+
+sub elapsed_time { tv_interval($request_data{begin_time}, [gettimeofday]) }
 
 =head1 Author
 

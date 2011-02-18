@@ -1,7 +1,7 @@
 package Nginx::Simple;
 use Exporter;
 
-our $VERSION = '0.06';
+our $VERSION = '0.07';
 
 @ISA = qw(Exporter);
 
@@ -558,12 +558,48 @@ sub init_dispatcher {
                     return $self->init_error($sub_call);
                 }
 
-                return &dispatch(
-                    $self->server,
-                    class  => $init_class,
-                    method => 'error', 
-                    error  => "$@",
+                # reset request data
+                %request_data = (
+                    %request_data,
+                    headers       => { 'Content-Type' => 'text/html' },
+                    output        => q[],
+                    status        => 200,
+                    server_object => $r,
+                    request       => $params{request} || $r->request_body,
+                    args          => $params{args}    || $r->args,
+                    request_parts => $params{request_parts},
                 );
+
+                eval {
+                    local $SIG{__DIE__} = sub { &format_error(shift) };
+                    if ($bless)
+                    {
+                        $self->error;
+                    }
+                    else
+                    {
+                        my $prerun_sub = "$init_class\::error";
+                        $prerun_sub->($self);
+                    }
+                };
+
+                if ($@ and $@ ne "nginx-exit\n")
+                {
+                    if ($method eq 'error')
+                    {
+                        # you've got an error in your error handler
+                        warn "Error in error handler... ($class\::error)\n";
+
+                        return $self->init_error($sub_call);
+                    }
+                }
+                else
+                {
+                    $self->process_auto_header
+                        if $self->auto_header and $self->dispatching;
+
+                    return OK;
+                }
             }
         }
 
@@ -594,12 +630,48 @@ sub init_dispatcher {
                     return $self->init_error($sub_call);
                 }
 
-                return &dispatch(
-                    $self->server,
-                    class  => $init_class,
-                    method => 'error', 
-                    error  => "$@",
+                # reset request data
+                %request_data = (
+                    %request_data,
+                    headers       => { 'Content-Type' => 'text/html' },
+                    output        => q[],
+                    status        => 200,
+                    server_object => $r,
+                    request       => $params{request} || $r->request_body,
+                    args          => $params{args}    || $r->args,
+                    request_parts => $params{request_parts},
                 );
+
+                eval {
+                    local $SIG{__DIE__} = sub { &format_error(shift) };
+                    if ($bless)
+                    {
+                        $self->error;
+                    }
+                    else
+                    {
+                        my $prerun_sub = "$init_class\::error";
+                        $prerun_sub->($self);
+                    }
+                };
+
+                if ($@ and $@ ne "nginx-exit\n")
+                {
+                    if ($method eq 'error')
+                    {
+                        # you've got an error in your error handler
+                        warn "Error in error handler... ($class\::error)\n";
+
+                        return $self->init_error($sub_call);
+                    }
+                }
+                else
+                {
+                    $self->process_auto_header
+                        if $self->auto_header and $self->dispatching;
+
+                    return OK;
+                }
             }
             else
             {
@@ -681,7 +753,20 @@ sub format_error
     }
 }
 
+=head3 error_stack
+
+Returns the "error stack" as an array.
+
+=cut
+
 sub error_stack { @error_stack };
+
+=head3 get_error
+
+Returns error as string.
+
+=cut
+
 sub get_error   { $die_error   };
 
 sub make_error_stack
@@ -770,7 +855,7 @@ sub elapsed_time { tv_interval($request_data{begin_time}, [gettimeofday]) }
 
 =head1 Author
 
-Michael J. Flickinger, C<< <mjflick@open-site.org> >>
+Michael J. Flickinger, C<< <mjflick@gnu.org> >>
 
 =head1 Copyright & License
 

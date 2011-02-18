@@ -10,13 +10,15 @@ use Nginx::Simple::Dispatcher;
 our @ISA    = qw(Exporter Nginx::Simple::Dispatcher);
 our @EXPORT = (@Nginx::Simple::HTTP_STATUS_CODES);
 
-our $VERSION = '0.01';
+our $VERSION = '0.02';
 
 =head1 NAME
 
 Nginx::Simple::Dispatch - Easy to use dispatcher interface for "--with-http_perl_module"
 
 =head1 SYNOPSIS
+
+For an "instant working example" please see the ./testdrive-example directory.
 
 MainPage.pm:
 
@@ -41,11 +43,14 @@ MainPage.pm:
 
    sub error {
        my $self = shift;
-       my $error = shift;
+       my $self->get_error;
+       my @stack = $self->error_stack;
 
        $self->status(500);
        $self->print('Something blew up! Kaboooooom!<hr>');
        $self->print("Details: <pre>$error</pre>");
+
+       $self->cleanup;
    }
 
    sub bad_dispatch {
@@ -179,7 +184,7 @@ sub local_dispatch
 
 =head1 Author
 
-Michael J. Flickinger, C<< <mjflick@open-site.org> >>
+Michael J. Flickinger, C<< <mjflick@gnu.org> >>
 
 =head1 Copyright & License
 

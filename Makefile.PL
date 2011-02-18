@@ -11,6 +11,7 @@ license 'perl';
 requires 'XML::Simple';
 requires 'CGI::Cookie';
 requires 'Time::HiRes';
+requires 'nginx';
 
 install_script glob('bin/ngs');
 

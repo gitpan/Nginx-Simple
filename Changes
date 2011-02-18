@@ -1,7 +1,9 @@
 Revision history for Perl extension for Nginx::Simple
 
-0.06 2010-12-22
-    - Added lightweight dispatching engine along with "ngs" utility.
+0.07 2010-02-17
+    - error method gets object in dispatcher
+    - fixed problems in ngs script
+    - fixed problems in example directory
 
 0.04 2008-12-08
     - fixing status bug

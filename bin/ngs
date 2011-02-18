@@ -41,8 +41,8 @@ sub run
 
     for my $key (keys %default_options)
     {
-	$self->{options}{$key} = $default_options{$key}
-	    unless $self->{options}{$key} or $self->{config}{$key};
+        $self->{options}{$key} = $default_options{$key}
+        unless $self->{options}{$key} or $self->{config}{$key};
     }
 
     return $self->help           if $self->{options}{help};
@@ -60,6 +60,9 @@ sub run
 
     # hack for --start to work
     $self->{options}{daemon} = 1
+        if $self->{options}{start};
+
+    $self->prune
         if $self->{options}{start};
 
     return $self->write_nginx_config(dump => 1)
@@ -110,11 +113,15 @@ sub stop
     my $killed = 0;
     for my $proc (@procs)
     {
+        $full_config =~ s{//}{/};
+
         next unless $proc->{config_file} eq $full_config;
         kill(15, $proc->{pid});
         print "killed: [pid: $proc->{pid}] $proc->{config_file}\n";
         $killed++;
     }
+
+    $self->prune;
 
     print "No active sessions.\n" unless $killed;
 }
@@ -134,7 +141,8 @@ sub list_processes
     print "Active sessions:\n";
     for my $proc (@procs)
     {
-        print "  [pid: $proc->{pid}] $proc->{config_file}\n";
+        my $pid = $proc->{pid} || 'ZOMBIE';
+        print "  [pid: $pid] $proc->{config_file} [$proc->{dir}]\n";
     }
 }
 
@@ -150,13 +158,13 @@ sub get_active_pids
     for my $dir (@dirs)
     {
         # is this process running?
-	open (NGPID, "$tmp_dir/$dir/nginx.pid");
-	my $pid = <NGPID>;
-	close(NGPID);
+        open (NGPID, "$tmp_dir/$dir/nginx.pid");
+        my $pid = <NGPID>;
+        close(NGPID);
 
-	# clense
-	$pid =~ s/[\n\r]//g;
-
+        # clense
+        $pid =~ s/[\n\r]//g;
+        
         next unless -d "/proc/$pid";
 
         open(CF, "$tmp_dir/$dir/config.path");
@@ -165,9 +173,13 @@ sub get_active_pids
 
         chomp($config_location);
 
+        # avoid path starting with //
+        $config_location =~ s{//}{/};
+
         push @pid_data, {
             config_file => $config_location,
             pid         => $pid,
+            dir         => "$tmp_dir/$dir/",
         };
     }
 
@@ -185,9 +197,14 @@ sub prune
     for my $dir (@dirs)
     {
         # is this process running?
-        my (undef, $pid) = split('-', $dir);
+        open (NGPID, "$tmp_dir/$dir/nginx.pid");
+        my $pid = <NGPID>;
+        close(NGPID);
 
-        next if -d "/proc/$pid";
+        # clense
+        $pid =~ s/[\n\r]//g;
+
+        next if -d "/proc/$pid" and $pid;
 
         open(CF, "$tmp_dir/$dir/nginx.pid");
         my $nginx_pid = <CF>;
@@ -652,16 +669,5 @@ sub parse_options
 my $run = {}; 
 bless($run);
 $run->run;
-
-=head1 Author
-
-Michael J. Flickinger, C<< <mjflick@open-site.org> >>
-
-=head1 Copyright & License
-
-You may distribute under the terms of either the GNU General Public
-License or the Artistic License.
-
-=cut
 
 1;

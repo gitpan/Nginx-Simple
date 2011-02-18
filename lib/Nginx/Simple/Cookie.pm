@@ -58,7 +58,7 @@ sub read
 
 =head1 Author
 
-Michael J. Flickinger, C<< <mjflick@open-site.org> >>
+Michael J. Flickinger, C<< <mjflick@gnu.org> >>
 
 =head1 Copyright & License
 
